@@ -5,6 +5,7 @@ from warnings import filterwarnings
 filterwarnings("ignore")
 
 import argparse
+import torch
 
 parser = argparse.ArgumentParser(description='Training GNN on Author Disambiguation task')
 
@@ -64,7 +65,7 @@ parser.add_argument('--clip', type=float, default=0.25,
 
 args = parser.parse_args()
 
-if args.cuda != -1:
+if args.cuda != -1 and torch.cuda.is_available():
     device = torch.device("cuda:" + str(args.cuda))
 else:
     device = torch.device("cpu")

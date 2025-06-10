@@ -34,7 +34,7 @@ parser.add_argument('--n_pool', type=int, default=8,
                     help='Number of process to sample subgraph')  
 parser.add_argument('--n_batch', type=int, default=32,
                     help='Number of batch (sampled graphs) for each epoch') 
-parser.add_argument('--batch_size', type=int, default=128,
+parser.add_argument('--batch_size', type=int, default=256,
                     help='Number of output nodes for training')   
 
 
@@ -63,10 +63,14 @@ parser.add_argument('--use_RTE',   help='Whether to use RTE',     action='store_
 args = parser.parse_args()
 args_print(args)
 
+if args.cuda != -1 and torch.cuda.is_available():
+    device = torch.device("cuda:" + str(args.cuda))
+else:
+    device = torch.device("cpu")
 
 def ogbn_sample(seed, samp_nodes):
     np.random.seed(seed)
-    ylabel      = torch.LongTensor(graph.y[samp_nodes])
+    ylabel      = torch.tensor(graph.y[samp_nodes], dtype=torch.long)
     feature, times, edge_list, indxs, _ = sample_subgraph(graph, \
                 inp = {'paper': np.concatenate([samp_nodes, graph.years[samp_nodes]]).reshape(2, -1).transpose()}, \
                 sampled_depth = args.sample_depth, sampled_number = args.sample_width, \
@@ -110,7 +114,6 @@ np.random.shuffle(graph.test_paper)
 y_preds = {pi : np.zeros(graph.y.max().item()+1) for pi in graph.test_paper}
 
 evaluator = Evaluator(name='ogbn-mag')
-device = torch.device("cuda:%d" % args.cuda)
 gnn = GNN(conv_name = args.conv_name, in_dim = len(graph.node_feature['paper'][0]), \
           n_hid = args.n_hid, n_heads = args.n_heads, n_layers = args.n_layers, dropout = args.dropout,\
           num_types = len(graph.get_types()), num_relations = len(graph.get_meta_graph()) + 1,\
@@ -153,8 +156,8 @@ with torch.no_grad():
                 y_true += list(ylabel[:args.batch_size])
 
                 test_acc = evaluator.eval({
-                        'y_true': torch.LongTensor(y_true).unsqueeze(-1),
-                        'y_pred': torch.LongTensor(y_pred).unsqueeze(-1)
+                        'y_true': torch.tensor(y_true, dtype=torch.long).unsqueeze(-1),
+                        'y_pred': torch.tensor(y_pred, dtype=torch.long).unsqueeze(-1)
                     })['acc']
                 monitor.set_postfix(accuracy = test_acc)
                 
@@ -185,7 +188,7 @@ for pi in y_preds:
     y_pred += [y_preds[pi].argmax()]
     y_true += [graph.y[pi]]
 test_acc = evaluator.eval({
-                    'y_true': torch.LongTensor(y_true).unsqueeze(-1),
-                    'y_pred': torch.LongTensor(y_pred).unsqueeze(-1)
+                    'y_true': torch.tensor(y_true, dtype=torch.long).unsqueeze(-1),
+                    'y_pred': torch.tensor(y_pred, dtype=torch.long).unsqueeze(-1)
                 })['acc']
 print(test_acc)

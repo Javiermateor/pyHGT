@@ -1,5 +1,5 @@
 import argparse
-
+import torch
 from transformers import *
 
 from pyHGT.data import *
@@ -24,17 +24,22 @@ parser.add_argument('--citation_bar', type=int, default=1,
 
 args = parser.parse_args()
 
+if args.cuda != -1 and torch.cuda.is_available():
+    device = torch.device("cuda:" + str(args.cuda))
+else:
+    device = torch.device("cpu")
+
 venue_types = ['conference', 'journal', 'repository', 'patent']
 test_time_bar = 2016
 
 filename = 'PR%s_20190919.tsv' % args.domain
 print(f'Counting paper cites from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
 
 cite_dict = defaultdict(lambda: 0)
 
-with open(filename) as fin:
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -44,11 +49,11 @@ with open(filename) as fin:
 filename = 'Papers%s_20190919.tsv' % args.domain
 print(f'Reading Paper nodes from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
 
 paper_nodes = defaultdict(lambda: {})
 
-with open(filename) as fin:
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -69,22 +74,17 @@ with open(filename) as fin:
         paper_node = {'id': paper_id, 'title': title, 'type': 'paper', 'time': int(time)}
         paper_nodes[paper_id] = paper_node
 
-if args.cuda != -1:
-    device = torch.device("cuda:" + str(args.cuda))
-else:
-    device = torch.device("cpu")
-
 filename = 'PAb%s_20190919.tsv' % args.domain
 print(f'Getting paper abstract embeddings. Abstracts are from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename, 'r'))
+line_count = sum(1 for line in open(filename, 'r', encoding='utf-8', errors='ignore'))
 
 tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased')
 model = XLNetModel.from_pretrained('xlnet-base-cased',
                                    output_hidden_states=True,
                                    output_attentions=True).to(device)
 
-with open(filename) as fin:
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         try:
@@ -106,11 +106,11 @@ with open(filename) as fin:
 filename = 'vfi_vector.tsv'
 print(f'Reading Venue/Filed/Affiliation nodes from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
 
 vfi_ids = {}
 
-with open(filename) as fin:
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
         node_id = tokens[0]
@@ -119,12 +119,12 @@ with open(filename) as fin:
 filename = 'Papers%s_20190919.tsv' % args.domain
 print(f'Reading Paper-Venue triples from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename, 'r'))
+line_count = sum(1 for line in open(filename, 'r', encoding='utf-8', errors='ignore'))
 
 graph = Graph()
 remaining_nodes = []
 
-with open(filename) as fin:
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -149,8 +149,8 @@ print(f'Removed article count: {(org_count - len(paper_nodes)):,}')
 filename = 'PR%s_20190919.tsv' % args.domain
 print(f'Reading Paper-Paper triples from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -167,8 +167,8 @@ filename = 'PF%s_20190919.tsv' % args.domain
 print(f'Reading FieldOfStudyIds from {filename}...')
 ffl = {}
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -182,8 +182,8 @@ with open(filename) as fin:
 filename = 'FHierarchy_20190919.tsv'
 print(f'Reading field hierarchy from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -205,8 +205,8 @@ with open(filename) as fin:
 filename = 'PF%s_20190919.tsv' % args.domain
 print(f'Reading Paper-Field triples from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -224,8 +224,8 @@ filename = 'PAuAf%s_20190919.tsv' % args.domain
 print(f'Reading Author-Affiliation triples from {filename}...')
 paper_authors = defaultdict(lambda: {})
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
@@ -260,8 +260,8 @@ for paper_id in tqdm(paper_authors):
 filename = 'vfi_vector.tsv'
 print(f'Reading embeddings of Venue/Field/Affiliation nodes from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
 
@@ -277,8 +277,8 @@ with open(filename) as fin:
 filename = 'SeqName%s_20190919.tsv' % args.domain
 print(f'Reading node names from {filename}...')
 filename = f'{args.input_dir}/{filename}'
-line_count = sum(1 for line in open(filename))
-with open(filename) as fin:
+line_count = sum(1 for line in open(filename, encoding='utf-8', errors='ignore'))
+with open(filename, encoding='utf-8', errors='ignore') as fin:
     for line in tqdm(fin, total=line_count):
         tokens = line.strip().split('\t')
 

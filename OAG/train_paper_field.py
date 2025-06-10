@@ -5,6 +5,7 @@ from warnings import filterwarnings
 filterwarnings("ignore")
 
 import argparse
+import torch
 
 parser = argparse.ArgumentParser(description='Training GNN on Paper-Field (L2) classification task')
 
@@ -64,7 +65,7 @@ parser.add_argument('--clip', type=float, default=0.25,
 
 args = parser.parse_args()
 
-if args.cuda != -1:
+if args.cuda != -1 and torch.cuda.is_available():
     device = torch.device("cuda:" + str(args.cuda))
 else:
     device = torch.device("cpu")
@@ -242,7 +243,7 @@ for epoch in np.arange(args.n_epoch) + 1:
             node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
                                    edge_time.to(device), edge_index.to(device), edge_type.to(device))
             res  = classifier.forward(node_rep[x_ids])
-            loss = criterion(res, torch.FloatTensor(ylabel).to(device))
+            loss = criterion(res, torch.tensor(ylabel, dtype=torch.float32).to(device))
 
             optimizer.zero_grad() 
             torch.cuda.empty_cache()
@@ -264,7 +265,7 @@ for epoch in np.arange(args.n_epoch) + 1:
         node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
                                    edge_time.to(device), edge_index.to(device), edge_type.to(device))
         res  = classifier.forward(node_rep[x_ids])
-        loss = criterion(res, torch.FloatTensor(ylabel).to(device))
+        loss = criterion(res, torch.tensor(ylabel, dtype=torch.float32).to(device))
         
         '''
             Calculate Valid NDCG. Update the best model based on highest NDCG score.

@@ -28,7 +28,7 @@ parser.add_argument('--model_dir', type=str, default='./hgt_4layer',
                     help='The address for storing the trained models.')
 parser.add_argument('--plot', action='store_true',
                     help='Whether to plot the loss/acc curve')
-parser.add_argument('--cuda', type=int, default=0,
+parser.add_argument('--cuda', type=int, default=-1,
                     help='Avaiable GPU ID')
 parser.add_argument('--conv_name', type=str, default='hgt',
                     choices=['hgt', 'gcn', 'gat', 'rgcn', 'han', 'hetgnn'],
@@ -54,7 +54,7 @@ parser.add_argument('--n_batch', type=int, default=32,
                     help='Number of batch (sampled graphs) for each epoch') 
 parser.add_argument('--batch_size', type=int, default=128,
                     help='Number of output nodes for training')  
-parser.add_argument('--clip', type=float, default=1.0,
+parser.add_argument('--clip', type=float, default=0.25,
                     help='Gradient Norm Clipping') 
 
 parser.add_argument('--prev_norm', help='Whether to add layer-norm on the previous layers', action='store_true')
@@ -62,11 +62,14 @@ parser.add_argument('--last_norm', help='Whether to add layer-norm on the last l
 parser.add_argument('--use_RTE',   help='Whether to use RTE',     action='store_true')
 
 args = parser.parse_args()
-args_print(args)
+if args.cuda != -1 and torch.cuda.is_available():
+    device = torch.device("cuda:" + str(args.cuda))
+else:
+    device = torch.device("cpu")
 
 def ogbn_sample(seed, samp_nodes):
     np.random.seed(seed)
-    ylabel      = torch.LongTensor(graph.y[samp_nodes])
+    ylabel      = torch.tensor(graph.y[samp_nodes], dtype=torch.long)
     feature, times, edge_list, indxs, _ = sample_subgraph(graph, \
                 inp = {'paper': np.concatenate([samp_nodes, graph.years[samp_nodes]]).reshape(2, -1).transpose()}, \
                 sampled_depth = args.sample_depth, sampled_number = args.sample_width, \
@@ -103,7 +106,6 @@ def prepare_data(pool, task_type = 'train', s_idx = 0, n_batch = args.n_batch, b
 
 graph = dill.load(open(args.data_dir, 'rb'))
 evaluator = Evaluator(name='ogbn-mag')
-device = torch.device("cuda:%d" % args.cuda)
 target_nodes = np.arange(len(graph.node_feature['paper']))
 gnn = GNN(conv_name = args.conv_name, in_dim = len(graph.node_feature['paper'][0]), \
           n_hid = args.n_hid, n_heads = args.n_heads, n_layers = args.n_layers, dropout = args.dropout,\
@@ -161,7 +163,7 @@ for epoch in np.arange(args.n_epoch) + 1:
     for node_feature, node_type, edge_time, edge_index, edge_type, (train_mask, valid_mask, test_mask), ylabel in datas:
         node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
                                edge_time.to(device), edge_index.to(device), edge_type.to(device))
-        ylabel = torch.LongTensor(ylabel).to(device)
+        ylabel = torch.tensor(ylabel, dtype=torch.long).to(device)
         train_res  = classifier.forward(node_rep[:len(ylabel)][train_mask])
         valid_res  = classifier.forward(node_rep[:len(ylabel)][valid_mask])
         test_res   = classifier.forward(node_rep[:len(ylabel)][test_mask])
