@@ -16,6 +16,18 @@ import dill
 from functools import partial
 import multiprocessing as mp
 
+def _dd_int_factory():
+    return defaultdict(int)
+
+def _dd_dd_int_factory():
+    return defaultdict(_dd_int_factory)
+
+def _dd_dd_dd_int_factory():
+    return defaultdict(_dd_dd_int_factory)
+
+def _dd_dd_dd_dd_int_factory():
+    return defaultdict(_dd_dd_dd_int_factory)
+
 class Graph():
     def __init__(self):
         super(Graph, self).__init__()
@@ -27,21 +39,15 @@ class Graph():
             node_bacward: node_id -> feature_dict
             node_feature: a DataFrame containing all features
         '''
-        self.node_forward = defaultdict(lambda: {})
-        self.node_bacward = defaultdict(lambda: [])
-        self.node_feature = defaultdict(lambda: [])
+        self.node_forward = defaultdict(dict)
+        self.node_bacward = defaultdict(list)
+        self.node_feature = defaultdict(list)
 
         '''
             edge_list: index the adjacancy matrix (time) by 
             <target_type, source_type, relation_type, target_id, source_id>
         '''
-        self.edge_list = defaultdict( #target_type
-                            lambda: defaultdict(  #source_type
-                                lambda: defaultdict(  #relation_type
-                                    lambda: defaultdict(  #target_id
-                                        lambda: defaultdict( #source_id(
-                                            lambda: int # time
-                                        )))))
+        self.edge_list = defaultdict(_dd_dd_dd_dd_int_factory)
         self.times = {}
     def add_node(self, node):
         nfl = self.node_forward[node['type']]
@@ -82,7 +88,20 @@ class Graph():
     def get_types(self):
         return list(self.node_feature.keys())
 
+def _budget_factory():
+    return [0., 0]
 
+def _dd_budget_factory():
+    return defaultdict(_budget_factory)
+
+def _dd_list_factory():
+    return defaultdict(list)
+
+def _dd_dd_list_factory():
+    return defaultdict(_dd_list_factory)
+
+def _dd_dd_dd_list_factory():
+    return defaultdict(_dd_dd_list_factory)
 
 def sample_subgraph(graph, sampled_depth = 2, sampled_number = 8, inp = None, feature_extractor = feature_OAG):
     '''
@@ -91,18 +110,9 @@ def sample_subgraph(graph, sampled_depth = 2, sampled_number = 8, inp = None, fe
         Currently sampled nodes are stored in layer_data.
         After nodes are sampled, we construct the sampled adjacancy matrix.
     '''
-    layer_data  = defaultdict( #target_type
-                        lambda: {} # {target_id: [ser, time]}
-                    )
-    budget     = defaultdict( #source_type
-                                    lambda: defaultdict(  #source_id
-                                        lambda: [0., 0] #[sampled_score, time]
-                            ))
-    new_layer_adj  = defaultdict( #target_type
-                                    lambda: defaultdict(  #source_type
-                                        lambda: defaultdict(  #relation_type
-                                            lambda: [] #[target_id, source_id]
-                                )))
+    layer_data  = defaultdict(dict)
+    budget     = defaultdict(_dd_budget_factory)
+    new_layer_adj  = defaultdict(_dd_dd_dd_list_factory)
     '''
         For each node being sampled, we find out all its neighborhood, 
         adding the degree count of these nodes in the budget.
@@ -177,11 +187,7 @@ def sample_subgraph(graph, sampled_depth = 2, sampled_number = 8, inp = None, fe
     '''
     feature, times, indxs, texts = feature_extractor(layer_data, graph)
             
-    edge_list = defaultdict( #target_type
-                        lambda: defaultdict(  #source_type
-                            lambda: defaultdict(  #relation_type
-                                lambda: [] # [target_id, source_id] 
-                                    )))
+    edge_list = defaultdict(_dd_dd_dd_list_factory)
     for _type in layer_data:
         for _key in layer_data[_type]:
             _ser = layer_data[_type][_key][0]

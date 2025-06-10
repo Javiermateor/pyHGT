@@ -84,9 +84,12 @@ model = XLNetModel.from_pretrained('xlnet-base-cased',
                                    output_hidden_states=True,
                                    output_attentions=True).to(device)
 
+processed_count = 0
 with open(filename, encoding='utf-8', errors='ignore') as fin:
     fin.readline()
     for line in tqdm(fin, total=line_count):
+        if processed_count >= 200:
+            break
         try:
             tokens = line.split('\t')
             paper_id = tokens[0]
@@ -100,6 +103,7 @@ with open(filename, encoding='utf-8', errors='ignore') as fin:
                 rep = (all_hidden_states[-2][0] * all_attentions[-2][0].mean(dim=0).mean(dim=0).view(-1, 1)).sum(dim=0)
 
                 paper_node['emb'] = rep.tolist()
+                processed_count += 1
         except Exception as e:
             print(e)
 

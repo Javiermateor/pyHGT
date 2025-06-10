@@ -6,6 +6,7 @@ filterwarnings("ignore")
 
 import argparse
 import torch
+import multiprocessing as mp
 
 parser = argparse.ArgumentParser(description='Training GNN on Paper-Field (L2) classification task')
 
@@ -63,37 +64,13 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='Gradient Norm Clipping') 
 
 
-args = parser.parse_args()
-
-if args.cuda != -1 and torch.cuda.is_available():
-    device = torch.device("cuda:" + str(args.cuda))
-else:
-    device = torch.device("cpu")
-
-graph = renamed_load(open(os.path.join(args.data_dir, 'graph%s.pk' % args.domain), 'rb'))
-
-train_range = {t: True for t in graph.times if t != None and t < 2015}
-valid_range = {t: True for t in graph.times if t != None and t >= 2015  and t <= 2016}
-test_range  = {t: True for t in graph.times if t != None and t > 2016}
-
-types = graph.get_types()
-'''
-    cand_list stores all the L2 fields, which is the classification domain.
-'''
-cand_list = list(graph.edge_list['field']['paper']['PF_in_L2'].keys())
-'''
-Use KL Divergence here, since each paper can be associated with multiple fields.
-Thus this task is a multi-label classification.
-'''
-criterion = nn.KLDivLoss(reduction='batchmean')
-
-def node_classification_sample(seed, pairs, time_range):
+def node_classification_sample(seed, pairs, time_range, batch_size, sample_depth, sample_width, graph, cand_list):
     '''
         sub-graph sampling and label preparation for node classification:
         (1) Sample batch_size number of output nodes (papers), get their time.
     '''
     np.random.seed(seed)
-    target_ids = np.random.choice(list(pairs.keys()), args.batch_size, replace = False)
+    target_ids = np.random.choice(list(pairs.keys()), batch_size, replace = False)
     target_info = []
     for target_id in target_ids:
         _, _time = pairs[target_id]
@@ -104,7 +81,7 @@ def node_classification_sample(seed, pairs, time_range):
     '''
     feature, times, edge_list, _, _ = sample_subgraph(graph, time_range, \
                 inp = {'paper': np.array(target_info)}, \
-                sampled_depth = args.sample_depth, sampled_number = args.sample_width)
+                sampled_depth = sample_depth, sampled_number = sample_width)
 
 
     '''
@@ -112,13 +89,13 @@ def node_classification_sample(seed, pairs, time_range):
     '''
     masked_edge_list = []
     for i in edge_list['paper']['field']['rev_PF_in_L2']:
-        if i[0] >= args.batch_size:
+        if i[0] >= batch_size:
             masked_edge_list += [i]
     edge_list['paper']['field']['rev_PF_in_L2'] = masked_edge_list
 
     masked_edge_list = []
     for i in edge_list['field']['paper']['PF_in_L2']:
-        if i[1] >= args.batch_size:
+        if i[1] >= batch_size:
             masked_edge_list += [i]
     edge_list['field']['paper']['PF_in_L2'] = masked_edge_list
     
@@ -131,198 +108,225 @@ def node_classification_sample(seed, pairs, time_range):
         (5) Prepare the labels for each output target node (paper), and their index in sampled graph.
             (node_dict[type][0] stores the start index of a specific type of nodes)
     '''
-    ylabel = np.zeros([args.batch_size, len(cand_list)])
+    ylabel = np.zeros([batch_size, len(cand_list)])
     for x_id, target_id in enumerate(target_ids):
         for source_id in pairs[target_id][0]:
             ylabel[x_id][cand_list.index(source_id)] = 1
     ylabel /= ylabel.sum(axis=1).reshape(-1, 1)
-    x_ids = np.arange(args.batch_size) + node_dict['paper'][0]
+    x_ids = np.arange(batch_size) + node_dict['paper'][0]
     return node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel
     
-def prepare_data(pool):
+def prepare_data(pool, n_batch, batch_size, sample_depth, sample_width, graph, cand_list, sel_train_pairs, sel_valid_pairs, train_range, valid_range):
     '''
         Sampled and prepare training and validation data using multi-process parallization.
     '''
     jobs = []
-    for batch_id in np.arange(args.n_batch):
+    for batch_id in np.arange(n_batch):
         p = pool.apply_async(node_classification_sample, args=(randint(), \
-            sel_train_pairs, train_range))
+            sel_train_pairs, train_range, batch_size, sample_depth, sample_width, graph, cand_list))
         jobs.append(p)
     p = pool.apply_async(node_classification_sample, args=(randint(), \
-            sel_valid_pairs, valid_range))
+            sel_valid_pairs, valid_range, batch_size, sample_depth, sample_width, graph, cand_list))
     jobs.append(p)
     return jobs
 
 
-train_pairs = {}
-valid_pairs = {}
-test_pairs  = {}
-'''
-    Prepare all the souce nodes (L2 field) associated with each target node (paper) as dict
-'''
-for target_id in graph.edge_list['paper']['field']['rev_PF_in_L2']:
-    for source_id in graph.edge_list['paper']['field']['rev_PF_in_L2'][target_id]:
-        _time = graph.edge_list['paper']['field']['rev_PF_in_L2'][target_id][source_id]
-        if _time in train_range:
-            if target_id not in train_pairs:
-                train_pairs[target_id] = [[], _time]
-            train_pairs[target_id][0] += [source_id]
-        elif _time in valid_range:
-            if target_id not in valid_pairs:
-                valid_pairs[target_id] = [[], _time]
-            valid_pairs[target_id][0] += [source_id]
-        else:
-            if target_id not in test_pairs:
-                test_pairs[target_id]  = [[], _time]
-            test_pairs[target_id][0]  += [source_id]
-
-
-np.random.seed(43)
-'''
-    Only train and valid with a certain percentage of data, if necessary.
-'''
-sel_train_pairs = {p : train_pairs[p] for p in np.random.choice(list(train_pairs.keys()), int(len(train_pairs) * args.data_percentage), replace = False)}
-sel_valid_pairs = {p : valid_pairs[p] for p in np.random.choice(list(valid_pairs.keys()), int(len(valid_pairs) * args.data_percentage), replace = False)}
-
-            
-'''
-    Initialize GNN (model is specified by conv_name) and Classifier
-'''
-gnn = GNN(conv_name = args.conv_name, in_dim = len(graph.node_feature['paper']['emb'].values[0]) + 401, \
-          n_hid = args.n_hid, n_heads = args.n_heads, n_layers = args.n_layers, dropout = args.dropout,\
-          num_types = len(graph.get_types()), num_relations = len(graph.get_meta_graph()) + 1).to(device)
-classifier = Classifier(args.n_hid, len(cand_list)).to(device)
-
-model = nn.Sequential(gnn, classifier)
-
-
-if args.optimizer == 'adamw':
-    optimizer = torch.optim.AdamW(model.parameters())
-elif args.optimizer == 'adam':
-    optimizer = torch.optim.Adam(model.parameters())
-elif args.optimizer == 'sgd':
-    optimizer = torch.optim.SGD(model.parameters(), lr = 0.1)
-elif args.optimizer == 'adagrad':
-    optimizer = torch.optim.Adagrad(model.parameters())
-
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1000, eta_min=1e-6)
-
-stats = []
-res = []
-best_val   = 0
-train_step = 1500
-
-pool = mp.Pool(args.n_pool)
-st = time.time()
-jobs = prepare_data(pool)
-
-for epoch in np.arange(args.n_epoch) + 1:
-    '''
-        Prepare Training and Validation Data
-    '''
-    train_data = [job.get() for job in jobs[:-1]]
-    valid_data = jobs[-1].get()
-    pool.close()
-    pool.join()
-    '''
-        After the data is collected, close the pool and then reopen it.
-    '''
-    pool = mp.Pool(args.n_pool)
-    jobs = prepare_data(pool)
-    et = time.time()
-    print('Data Preparation: %.1fs' % (et - st))
+if __name__ == '__main__':
+    mp.freeze_support()  # Required for Windows multiprocessing
     
+    args = parser.parse_args()
+
+    if args.cuda != -1 and torch.cuda.is_available():
+        device = torch.device("cuda:" + str(args.cuda))
+    else:
+        device = torch.device("cpu")
+
+    graph = renamed_load(open(os.path.join(args.data_dir, 'graph%s.pk' % args.domain), 'rb'))
+
+    train_range = {t: True for t in graph.times if t != None and t < 2015}
+    valid_range = {t: True for t in graph.times if t != None and t >= 2015  and t <= 2016}
+    test_range  = {t: True for t in graph.times if t != None and t > 2016}
+
+    types = graph.get_types()
     '''
-        Train (time < 2015)
+        cand_list stores all the L2 fields, which is the classification domain.
     '''
-    model.train()
-    train_losses = []
-    torch.cuda.empty_cache()
-    for _ in range(args.repeat):
-        for node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel in train_data:
+    cand_list = list(graph.edge_list['field']['paper']['PF_in_L2'].keys())
+    '''
+    Use KL Divergence here, since each paper can be associated with multiple fields.
+    Thus this task is a multi-label classification.
+    '''
+    criterion = nn.KLDivLoss(reduction='batchmean')
+
+    train_pairs = {}
+    valid_pairs = {}
+    test_pairs  = {}
+    '''
+        Prepare all the souce nodes (L2 field) associated with each target node (paper) as dict
+    '''
+    for target_id in graph.edge_list['paper']['field']['rev_PF_in_L2']:
+        for source_id in graph.edge_list['paper']['field']['rev_PF_in_L2'][target_id]:
+            _time = graph.edge_list['paper']['field']['rev_PF_in_L2'][target_id][source_id]
+            if _time in train_range:
+                if target_id not in train_pairs:
+                    train_pairs[target_id] = [[], _time]
+                train_pairs[target_id][0] += [source_id]
+            elif _time in valid_range:
+                if target_id not in valid_pairs:
+                    valid_pairs[target_id] = [[], _time]
+                valid_pairs[target_id][0] += [source_id]
+            else:
+                if target_id not in test_pairs:
+                    test_pairs[target_id]  = [[], _time]
+                test_pairs[target_id][0]  += [source_id]
+
+
+    np.random.seed(43)
+    '''
+        Only train and valid with a certain percentage of data, if necessary.
+    '''
+    sel_train_pairs = {p : train_pairs[p] for p in np.random.choice(list(train_pairs.keys()), int(len(train_pairs) * args.data_percentage), replace = False)}
+    sel_valid_pairs = {p : valid_pairs[p] for p in np.random.choice(list(valid_pairs.keys()), int(len(valid_pairs) * args.data_percentage), replace = False)}
+
+                
+    '''
+        Initialize GNN (model is specified by conv_name) and Classifier
+    '''
+    gnn = GNN(conv_name = args.conv_name, in_dim = len(graph.node_feature['paper']['emb'].values[0]) + 401, \
+              n_hid = args.n_hid, n_heads = args.n_heads, n_layers = args.n_layers, dropout = args.dropout,\
+              num_types = len(graph.get_types()), num_relations = len(graph.get_meta_graph()) + 1).to(device)
+    classifier = Classifier(args.n_hid, len(cand_list)).to(device)
+
+    model = nn.Sequential(gnn, classifier)
+
+
+    if args.optimizer == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters())
+    elif args.optimizer == 'adam':
+        optimizer = torch.optim.Adam(model.parameters())
+    elif args.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), lr = 0.1)
+    elif args.optimizer == 'adagrad':
+        optimizer = torch.optim.Adagrad(model.parameters())
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1000, eta_min=1e-6)
+
+    stats = []
+    res = []
+    best_val   = 0
+    train_step = 1500
+
+    pool = mp.Pool(args.n_pool)
+    st = time.time()
+    jobs = prepare_data(pool, args.n_batch, args.batch_size, args.sample_depth, args.sample_width, graph, cand_list, sel_train_pairs, sel_valid_pairs, train_range, valid_range)
+
+    for epoch in np.arange(args.n_epoch) + 1:
+        '''
+            Prepare Training and Validation Data
+        '''
+        train_data = [job.get() for job in jobs[:-1]]
+        valid_data = jobs[-1].get()
+        pool.close()
+        pool.join()
+        '''
+            After the data is collected, close the pool and then reopen it.
+        '''
+        pool = mp.Pool(args.n_pool)
+        jobs = prepare_data(pool, args.n_batch, args.batch_size, args.sample_depth, args.sample_width, graph, cand_list, sel_train_pairs, sel_valid_pairs, train_range, valid_range)
+        et = time.time()
+        print('Data Preparation: %.1fs' % (et - st))
+        
+        '''
+            Train (time < 2015)
+        '''
+        model.train()
+        train_losses = []
+        torch.cuda.empty_cache()
+        for _ in range(args.repeat):
+            for node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel in train_data:
+                node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
+                                       edge_time.to(device), edge_index.to(device), edge_type.to(device))
+                res  = classifier.forward(node_rep[x_ids])
+                loss = criterion(res, torch.tensor(ylabel, dtype=torch.float32).to(device))
+
+                optimizer.zero_grad() 
+                torch.cuda.empty_cache()
+                loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                optimizer.step()
+
+                train_losses += [loss.cpu().detach().tolist()]
+                train_step += 1
+                scheduler.step(train_step)
+                del res, loss
+        '''
+            Valid (2015 <= time <= 2016)
+        '''
+        model.eval()
+        with torch.no_grad():
+            node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = valid_data
             node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
-                                   edge_time.to(device), edge_index.to(device), edge_type.to(device))
+                                       edge_time.to(device), edge_index.to(device), edge_type.to(device))
             res  = classifier.forward(node_rep[x_ids])
             loss = criterion(res, torch.tensor(ylabel, dtype=torch.float32).to(device))
-
-            optimizer.zero_grad() 
-            torch.cuda.empty_cache()
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-
-            train_losses += [loss.cpu().detach().tolist()]
-            train_step += 1
-            scheduler.step(train_step)
+            
+            '''
+                Calculate Valid NDCG. Update the best model based on highest NDCG score.
+            '''
+            valid_res = []
+            for ai, bi in zip(ylabel, res.argsort(descending = True)):
+                valid_res += [ai[bi.cpu().numpy()]]
+            valid_ndcg = np.average([ndcg_at_k(resi, len(resi)) for resi in valid_res])
+            
+            if valid_ndcg > best_val:
+                best_val = valid_ndcg
+                torch.save(model, os.path.join(args.model_dir, args.task_name + '_' + args.conv_name))
+                print('UPDATE!!!')
+            
+            st = time.time()
+            print(("Epoch: %d (%.1fs)  LR: %.5f Train Loss: %.2f  Valid Loss: %.2f  Valid NDCG: %.4f") % \
+                  (epoch, (st-et), optimizer.param_groups[0]['lr'], np.average(train_losses), \
+                        loss.cpu().detach().tolist(), valid_ndcg))
+            stats += [[np.average(train_losses), loss.cpu().detach().tolist()]]
             del res, loss
+        del train_data, valid_data
+
+
     '''
-        Valid (2015 <= time <= 2016)
+        Evaluate the trained model via test set (time > 2016)
     '''
-    model.eval()
+
     with torch.no_grad():
-        node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = valid_data
-        node_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
-                                   edge_time.to(device), edge_index.to(device), edge_type.to(device))
-        res  = classifier.forward(node_rep[x_ids])
-        loss = criterion(res, torch.tensor(ylabel, dtype=torch.float32).to(device))
-        
-        '''
-            Calculate Valid NDCG. Update the best model based on highest NDCG score.
-        '''
-        valid_res = []
-        for ai, bi in zip(ylabel, res.argsort(descending = True)):
-            valid_res += [ai[bi.cpu().numpy()]]
-        valid_ndcg = np.average([ndcg_at_k(resi, len(resi)) for resi in valid_res])
-        
-        if valid_ndcg > best_val:
-            best_val = valid_ndcg
-            torch.save(model, os.path.join(args.model_dir, args.task_name + '_' + args.conv_name))
-            print('UPDATE!!!')
-        
-        st = time.time()
-        print(("Epoch: %d (%.1fs)  LR: %.5f Train Loss: %.2f  Valid Loss: %.2f  Valid NDCG: %.4f") % \
-              (epoch, (st-et), optimizer.param_groups[0]['lr'], np.average(train_losses), \
-                    loss.cpu().detach().tolist(), valid_ndcg))
-        stats += [[np.average(train_losses), loss.cpu().detach().tolist()]]
-        del res, loss
-    del train_data, valid_data
+        test_res = []
+        for _ in range(10):
+            node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = \
+                        node_classification_sample(randint(), test_pairs, test_range, args.batch_size, args.sample_depth, args.sample_width, graph, cand_list)
+            paper_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
+                        edge_time.to(device), edge_index.to(device), edge_type.to(device))[x_ids]
+            res = classifier.forward(paper_rep)
+            for ai, bi in zip(ylabel, res.argsort(descending = True)):
+                test_res += [ai[bi.cpu().numpy()]]
+        test_ndcg = [ndcg_at_k(resi, len(resi)) for resi in test_res]
+        print('Last Test NDCG: %.4f' % np.average(test_ndcg))
+        test_mrr = mean_reciprocal_rank(test_res)
+        print('Last Test MRR:  %.4f' % np.average(test_mrr))
 
 
-'''
-    Evaluate the trained model via test set (time > 2016)
-'''
-
-with torch.no_grad():
-    test_res = []
-    for _ in range(10):
-        node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = \
-                    node_classification_sample(randint(), test_pairs, test_range)
-        paper_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
-                    edge_time.to(device), edge_index.to(device), edge_type.to(device))[x_ids]
-        res = classifier.forward(paper_rep)
-        for ai, bi in zip(ylabel, res.argsort(descending = True)):
-            test_res += [ai[bi.cpu().numpy()]]
-    test_ndcg = [ndcg_at_k(resi, len(resi)) for resi in test_res]
-    print('Last Test NDCG: %.4f' % np.average(test_ndcg))
-    test_mrr = mean_reciprocal_rank(test_res)
-    print('Last Test MRR:  %.4f' % np.average(test_mrr))
-
-
-best_model = torch.load(os.path.join(args.model_dir, args.task_name + '_' + args.conv_name))
-best_model.eval()
-gnn, classifier = best_model
-with torch.no_grad():
-    test_res = []
-    for _ in range(10):
-        node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = \
-                    node_classification_sample(randint(), test_pairs, test_range)
-        paper_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
-                    edge_time.to(device), edge_index.to(device), edge_type.to(device))[x_ids]
-        res = classifier.forward(paper_rep)
-        for ai, bi in zip(ylabel, res.argsort(descending = True)):
-            test_res += [ai[bi.cpu().numpy()]]
-    test_ndcg = [ndcg_at_k(resi, len(resi)) for resi in test_res]
-    print('Best Test NDCG: %.4f' % np.average(test_ndcg))
-    test_mrr = mean_reciprocal_rank(test_res)
-    print('Best Test MRR:  %.4f' % np.average(test_mrr))
+    best_model = torch.load(os.path.join(args.model_dir, args.task_name + '_' + args.conv_name))
+    best_model.eval()
+    gnn, classifier = best_model
+    with torch.no_grad():
+        test_res = []
+        for _ in range(10):
+            node_feature, node_type, edge_time, edge_index, edge_type, x_ids, ylabel = \
+                        node_classification_sample(randint(), test_pairs, test_range, args.batch_size, args.sample_depth, args.sample_width, graph, cand_list)
+            paper_rep = gnn.forward(node_feature.to(device), node_type.to(device), \
+                        edge_time.to(device), edge_index.to(device), edge_type.to(device))[x_ids]
+            res = classifier.forward(paper_rep)
+            for ai, bi in zip(ylabel, res.argsort(descending = True)):
+                test_res += [ai[bi.cpu().numpy()]]
+        test_ndcg = [ndcg_at_k(resi, len(resi)) for resi in test_res]
+        print('Best Test NDCG: %.4f' % np.average(test_ndcg))
+        test_mrr = mean_reciprocal_rank(test_res)
+        print('Best Test MRR:  %.4f' % np.average(test_mrr))

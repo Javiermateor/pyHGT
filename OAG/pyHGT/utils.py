@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 import torch
+from collections import defaultdict
 
 def dcg_at_k(r, k):
     r = np.asfarray(r)[:k]
@@ -37,15 +38,15 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
         np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
+    return torch.sparse_coo_tensor(indices, values, shape)
 
 def randint():
-    return np.random.randint(2**32 - 1)
+    return np.random.randint(2**32 - 1, dtype=np.int64)
 
 
 
 def feature_OAG(layer_data, graph):
-    feature = {}
+    feature = defaultdict(lambda: [])
     times   = {}
     indxs   = {}
     texts   = []
@@ -56,7 +57,7 @@ def feature_OAG(layer_data, graph):
         tims  = np.array(list(layer_data[_type].values()))[:,1]
         
         if 'node_emb' in graph.node_feature[_type]:
-            feature[_type] = np.array(list(graph.node_feature[_type].loc[idxs, 'node_emb']), dtype=np.float)
+            feature[_type] = np.array(list(graph.node_feature[_type].loc[idxs, 'node_emb']), dtype=np.float32)
         else:
             feature[_type] = np.zeros([len(idxs), 400])
         feature[_type] = np.concatenate((feature[_type], list(graph.node_feature[_type].loc[idxs, 'emb']),\
@@ -66,5 +67,5 @@ def feature_OAG(layer_data, graph):
         indxs[_type]   = idxs
         
         if _type == 'paper':
-            texts = np.array(list(graph.node_feature[_type].loc[idxs, 'title']), dtype=np.str)
+            texts = np.array(list(graph.node_feature[_type].loc[idxs, 'title']), dtype=str)
     return feature, times, indxs, texts
